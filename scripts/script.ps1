@@ -15,90 +15,87 @@ param(
     [string]$vaultUri
 )
 
-# Handle Azure PowerShell module version conflicts
-Write-Host "Setting up Azure PowerShell modules..."
+# Alternative implementation using REST APIs instead of PowerShell modules to avoid version conflicts
+Write-Host "Purview Demo Deployment Script - REST API Version"
+Write-Host "This version uses REST APIs to avoid Azure PowerShell module conflicts"
 
 try {
-    # Set PowerShell execution policy and security protocol
-    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+    # Set security protocol
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    # Remove any existing Az modules from the session to prevent conflicts
-    Write-Host "Cleaning up existing Azure PowerShell modules from current session..."
-    Get-Module -Name Az.* | Remove-Module -Force -ErrorAction SilentlyContinue
-    
-    # Uninstall conflicting versions if they exist
-    $conflictingModules = @('Az.Accounts', 'Az.Purview', 'Az.Storage', 'Az.DataFactory')
-    foreach ($moduleName in $conflictingModules) {
-        $installedVersions = Get-Module -Name $moduleName -ListAvailable
-        if ($installedVersions) {
-            Write-Host "Found existing versions of $moduleName, removing old versions..."
-            $installedVersions | ForEach-Object {
-                try {
-                    Uninstall-Module -Name $moduleName -RequiredVersion $_.Version -Force -ErrorAction SilentlyContinue
-                }
-                catch {
-                    Write-Warning "Could not uninstall $moduleName version $($_.Version): $($_.Exception.Message)"
-                }
-            }
-        }
-    }
-
-    # Install PowerShellGet if needed (ensures we have latest package management)
-    $psGet = Get-Module -Name PowerShellGet -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1
-    if (-not $psGet -or $psGet.Version -lt [Version]'2.2.5') {
-        Write-Host "Installing/updating PowerShellGet..."
-        Install-Module -Name PowerShellGet -Force -AllowClobber -Scope CurrentUser
-        Import-Module -Name PowerShellGet -Force
-    }
-
-    # Install required modules with compatible versions
-    Write-Host "Installing compatible Azure PowerShell modules..."
-    
-    # Install Az.Accounts first (base module required by others)
-    Write-Host "Installing Az.Accounts..."
-    Install-Module -Name Az.Accounts -RequiredVersion 3.0.2 -Force -AllowClobber -Scope CurrentUser -Repository PSGallery
-    Import-Module -Name Az.Accounts -RequiredVersion 3.0.2 -Force
-    
-    # Install compatible versions of other modules
-    Write-Host "Installing Az.Purview..."
-    Install-Module -Name Az.Purview -Force -AllowClobber -Scope CurrentUser -Repository PSGallery -SkipPublisherCheck
-    
-    Write-Host "Installing Az.Storage..."
+    # Install only essential modules
+    Write-Host "Installing minimal required Azure PowerShell modules..."
+    Install-Module -Name Az.Accounts -Force -AllowClobber -Scope CurrentUser -Repository PSGallery
     Install-Module -Name Az.Storage -Force -AllowClobber -Scope CurrentUser -Repository PSGallery
-    
-    Write-Host "Installing Az.DataFactory..."
     Install-Module -Name Az.DataFactory -Force -AllowClobber -Scope CurrentUser -Repository PSGallery
     
-    # Import modules in the correct order (dependencies first)
-    Write-Host "Importing Azure PowerShell modules..."
     Import-Module -Name Az.Accounts -Force
     Import-Module -Name Az.Storage -Force
     Import-Module -Name Az.DataFactory -Force
-    Import-Module -Name Az.Purview -Force
     
-    # Verify modules are loaded
-    $loadedModules = Get-Module -Name Az.*
-    Write-Host "Successfully loaded Azure PowerShell modules:"
-    $loadedModules | ForEach-Object { Write-Host "  - $($_.Name) v$($_.Version)" }
-    
-    # Verify specific commands are available
-    $purviewCommands = Get-Command -Module Az.Purview -Name "Add-AzPurviewAccountRootCollectionAdmin" -ErrorAction SilentlyContinue
-    if (-not $purviewCommands) {
-        throw "Az.Purview module loaded but Add-AzPurviewAccountRootCollectionAdmin command not available"
-    }
-    
-    Write-Host "Azure PowerShell modules setup completed successfully."
+    Write-Host "Essential modules loaded successfully."
 }
 catch {
-    Write-Error "Failed to set up Azure PowerShell modules: $($_.Exception.Message)"
-    Write-Host "Error details: $($_.Exception)"
-    Write-Host "Stack trace: $($_.ScriptStackTrace)"
+    Write-Error "Failed to load essential modules: $($_.Exception.Message)"
     throw
 }
 
 # Variables
 $pv_endpoint = "https://${accountName}.purview.azure.com"
+
+# Function to get access token for Azure Management API
+function Get-AzureManagementToken {
+    try {
+        $response = Invoke-RestMethod -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F' -Headers @{Metadata="true"} -Method GET
+        return $response.access_token
+    }
+    catch {
+        Write-Error "Failed to get Azure Management token: $($_.Exception.Message)"
+        throw
+    }
+}
+
+# Function to add root collection admin using REST API
+function Add-PurviewRootCollectionAdmin {
+    param(
+        [string]$subscriptionId,
+        [string]$resourceGroupName,
+        [string]$accountName,
+        [string]$objectId,
+        [string]$accessToken
+    )
+    
+    try {
+        $uri = "https://management.azure.com/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Purview/accounts/${accountName}/addRootCollectionAdmin?api-version=2021-07-01"
+        
+        $body = @{
+            objectId = $objectId
+        } | ConvertTo-Json
+        
+        $headers = @{
+            'Authorization' = "Bearer $accessToken"
+            'Content-Type' = 'application/json'
+        }
+        
+        Write-Host "Making REST API call to add root collection admin..."
+        Write-Host "URI: $uri"
+        Write-Host "Object ID: $objectId"
+        
+        $response = Invoke-RestMethod -Uri $uri -Method POST -Body $body -Headers $headers
+        Write-Host "Successfully added root collection admin via REST API"
+        return $response
+    }
+    catch {
+        Write-Error "Failed to add root collection admin via REST API: $($_.Exception.Message)"
+        if ($_.Exception.Response) {
+            $errorResponse = $_.Exception.Response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($errorResponse)
+            $errorContent = $reader.ReadToEnd()
+            Write-Host "Error response: $errorContent"
+        }
+        throw
+    }
+}
 
 function invokeWeb([string]$uri, [string]$access_token, [string]$method, [string]$body) { 
     $retryCount = 0
@@ -151,7 +148,6 @@ function putMetadataPolicy([string]$access_token, [string]$metadataPolicyId, [ob
     $body = ($payload | ConvertTo-Json -Depth 10)
     $response = invokeWeb $uri $access_token "PUT" $body
     Return $response
-
 }
 
 # [PUT] Key Vault
@@ -247,13 +243,12 @@ function putSource([string]$access_token, [hashtable]$payload) {
     Return $response
 }
 
-# Verify Azure context and authentication
+# Verify Azure context
 Write-Host "Verifying Azure authentication context..."
 try {
     $context = Get-AzContext
     if (-not $context) {
         Write-Host "No Azure context found. Attempting to authenticate using managed identity..."
-        # This should work automatically in Azure deployment scripts with managed identity
         Connect-AzAccount -Identity
         $context = Get-AzContext
     }
@@ -261,75 +256,30 @@ try {
     Write-Host "Azure context verified:"
     Write-Host "  Subscription: $($context.Subscription.Name) ($($context.Subscription.Id))"
     Write-Host "  Account: $($context.Account.Id)"
-    Write-Host "  Environment: $($context.Environment.Name)"
 }
 catch {
     Write-Error "Failed to establish Azure context: $($_.Exception.Message)"
     throw
 }
 
-# Add UAMI to Root Collection Admin
-Write-Host "Adding User Assigned Managed Identity to Root Collection Admin..."
-Write-Host "Parameters:"
-Write-Host "  Account Name: $accountName"
-Write-Host "  Resource Group: $resourceGroupName"
-Write-Host "  Object ID: $objectId"
-
+# Add UAMI to Root Collection Admin using REST API
+Write-Host "Adding User Assigned Managed Identity to Root Collection Admin using REST API..."
 try {
-    # Verify the Az.Purview module is properly loaded
-    $purviewModule = Get-Module -Name Az.Purview
-    if (-not $purviewModule) {
-        throw "Az.Purview module is not loaded. Please check module installation."
-    }
-    
-    Write-Host "Az.Purview module version: $($purviewModule.Version)"
-    
-    # Verify the command exists
-    $command = Get-Command -Name "Add-AzPurviewAccountRootCollectionAdmin" -ErrorAction SilentlyContinue
-    if (-not $command) {
-        Write-Host "Available Az.Purview commands:"
-        Get-Command -Module Az.Purview | Select-Object Name | Format-Table -AutoSize
-        throw "Command Add-AzPurviewAccountRootCollectionAdmin not found in Az.Purview module"
-    }
-    
-    # Add the root collection admin with retry logic
-    $maxRetries = 3
-    $retryCount = 0
-    $success = $false
-    
-    while (-not $success -and $retryCount -lt $maxRetries) {
-        try {
-            Write-Host "Attempt $($retryCount + 1) to add root collection admin..."
-            Add-AzPurviewAccountRootCollectionAdmin -AccountName $accountName -ResourceGroupName $resourceGroupName -ObjectId $objectId
-            $success = $true
-            Write-Host "Successfully added root collection admin."
-        }
-        catch {
-            $retryCount++
-            Write-Warning "Attempt $retryCount failed: $($_.Exception.Message)"
-            if ($retryCount -lt $maxRetries) {
-                Write-Host "Waiting 10 seconds before retry..."
-                Start-Sleep -Seconds 10
-            }
-        }
-    }
-    
-    if (-not $success) {
-        throw "Failed to add root collection admin after $maxRetries attempts"
-    }
+    $managementToken = Get-AzureManagementToken
+    Add-PurviewRootCollectionAdmin -subscriptionId $subscriptionId -resourceGroupName $resourceGroupName -accountName $accountName -objectId $objectId -accessToken $managementToken
 }
 catch {
     Write-Error "Failed to add root collection admin: $($_.Exception.Message)"
-    Write-Host "Error details: $($_.Exception)"
-    Write-Host "Available Az.Purview commands:"
-    Get-Command -Module Az.Purview -ErrorAction SilentlyContinue | Select-Object Name | Format-Table -AutoSize
     throw
 }
 
-# Get Access Token
+# Get Access Token for Purview
 $response = Invoke-WebRequest -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fpurview.azure.net%2F' -Headers @{Metadata="true"}
 $content = $response.Content | ConvertFrom-Json
 $access_token = $content.access_token
+
+# Continue with the rest of the script (same as original)
+Write-Host "Continuing with Purview configuration..."
 
 # 1. Update Root Collection Policy (Add Current User to Built-In Purview Roles)
 $rootCollectionPolicy = getMetadataPolicy $access_token $accountName
@@ -482,3 +432,5 @@ Invoke-AzDataFactoryV2Pipeline -ResourceGroupName $resourceGroupName -DataFactor
 $glossaryGuid = (createGlossary $access_token).guid
 $glossaryTermsTemplateUri = 'https://raw.githubusercontent.com/tayganr/purviewlab/main/assets/import-terms-sample.csv'
 importGlossaryTerms $access_token $glossaryGuid $glossaryTermsTemplateUri
+
+Write-Host "Purview demo deployment completed successfully!"

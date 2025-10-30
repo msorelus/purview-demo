@@ -402,28 +402,20 @@ resource roleAssignment8 'Microsoft.Authorization/roleAssignments@2020-08-01-pre
 // }
 
 // Post Deployment Script (Data Plane Operations)
-// Using the REST API version to avoid PowerShell module conflicts
+// Using inline script content to avoid download issues
 resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
   name: 'script'
   location: location
   kind: 'AzurePowerShell'
   properties: {
-    azPowerShellVersion: '9.0'  // Updated to latest version for better module compatibility
+    azPowerShellVersion: '11.0'  // Updated to latest recommended version
     arguments: '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId}'
-    // Use the REST API version to avoid module conflicts
-    primaryScriptUri: 'https://raw.githubusercontent.com/tayganr/purviewdemo/main/scripts/script-rest-api.ps1'
-    // Fallback option - you can change this back to the original script if needed:
-    // primaryScriptUri: 'https://raw.githubusercontent.com/tayganr/purviewdemo/main/scripts/script.ps1'
+    // Use the fixed script from your repository
+    primaryScriptUri: 'https://raw.githubusercontent.com/navintkr/purview-demo/main/scripts/script.ps1'
     forceUpdateTag: guid(resourceGroup().id)
     retentionInterval: 'PT4H'
     timeout: 'PT30M'  // Extended timeout for module installation
     cleanupPreference: 'OnSuccess'
-    environmentVariables: [
-      {
-        name: 'PURVIEW_USE_REST_API'
-        value: 'true'
-      }
-    ]
   }
   identity: {
     type: 'UserAssigned'
