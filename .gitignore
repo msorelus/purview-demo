@@ -1,0 +1,5 @@
+.DS_Store
+parameters.json
+.vscode/*
+test/*
+notes.md
