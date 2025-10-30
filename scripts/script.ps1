@@ -44,6 +44,9 @@ catch {
 # Variables
 $pv_endpoint = "https://${accountName}.purview.azure.com"
 
+# Extract suffix from account name (e.g., "pvdemonwdaq-pv" -> "nwdaq")
+$suffix = if ($accountName -match 'pvdemo([a-z0-9]+)-pv') { $matches[1] } else { "" }
+
 # Function to get access token for Azure Management API
 function Get-AzureManagementToken {
     try {
@@ -437,9 +440,21 @@ importGlossaryTerms $access_token $glossaryGuid $glossaryTermsTemplateUri
 # 15. Create Microsoft Fabric Workspace and Lakehouse
 Write-Host "Setting up Microsoft Fabric workspace and lakehouse..."
 try {
-    # Get Fabric access token
-    $fabricTokenResponse = Invoke-RestMethod -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fapi.fabric.microsoft.com%2F' -Headers @{Metadata="true"} -Method GET
-    $fabricToken = $fabricTokenResponse.access_token
+    # IMPORTANT: Fabric API requires user credentials or service principal with Fabric Admin role
+    # Managed identities cannot be added as Fabric capacity admins (only UPNs are supported)
+    # The user who deployed this template is already a Fabric capacity admin
+    
+    # Try to get Fabric access token from managed identity (will likely fail with 401)
+    # Alternative: Use user delegation token if provided via environment variable
+    if ($env:FABRIC_USER_TOKEN) {
+        Write-Host "Using provided user access token for Fabric operations..."
+        $fabricToken = $env:FABRIC_USER_TOKEN
+    }
+    else {
+        Write-Host "Attempting to get Fabric API token via managed identity..."
+        $fabricTokenResponse = Invoke-RestMethod -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fapi.fabric.microsoft.com%2F' -Headers @{Metadata="true"} -Method GET
+        $fabricToken = $fabricTokenResponse.access_token
+    }
     
     $managementToken = Get-AzureManagementToken
     
@@ -509,8 +524,61 @@ try {
     Write-Host "OneLake Path: $lakehouseAbfsPath"
 }
 catch {
-    Write-Warning "Fabric setup encountered an issue: $($_.Exception.Message)"
-    Write-Host "You may need to manually configure Fabric workspace and lakehouse."
+    $errorMessage = $_.Exception.Message
+    Write-Warning "Fabric setup encountered an issue: $errorMessage"
+    
+    # Check if it's an authorization error
+    if ($errorMessage -like "*401*" -or $errorMessage -like "*Unauthorized*") {
+        Write-Host ""
+        Write-Host "═══════════════════════════════════════════════════════════════════════════════"
+        Write-Host "  MANUAL FABRIC SETUP REQUIRED"
+        Write-Host "═══════════════════════════════════════════════════════════════════════════════"
+        Write-Host ""
+        Write-Host "The automated Fabric workspace creation failed because Fabric API requires"
+        Write-Host "user credentials with Fabric Admin permissions. Managed identities cannot"
+        Write-Host "create workspaces via the Fabric API."
+        Write-Host ""
+        Write-Host "Please complete the following manual steps to finish Fabric integration:"
+        Write-Host ""
+        Write-Host "1. Navigate to Microsoft Fabric Portal:"
+        Write-Host "   https://app.fabric.microsoft.com"
+        Write-Host ""
+        Write-Host "2. Create a new workspace:"
+        Write-Host "   - Click 'Workspaces' → '+ New workspace'"
+        Write-Host "   - Name: PurviewDemoWorkspace-${accountName}"
+        Write-Host "   - Description: Purview Demo Fabric Workspace"
+        Write-Host "   - Advanced Settings → License mode:"
+        Write-Host "     Select 'Fabric capacity'"
+        Write-Host "     Choose capacity: purviewdemofabric"
+        Write-Host ""
+        Write-Host "3. Create a Lakehouse in the workspace:"
+        Write-Host "   - In the workspace, click '+ New' → 'Lakehouse'"
+        Write-Host "   - Name: SalesLakehouse"
+        Write-Host "   - Description: Lakehouse for SQL data from AdventureWorks"
+        Write-Host ""
+        Write-Host "4. Set up Data Factory pipeline:"
+        Write-Host "   - Open Azure Data Factory: pvdemo${suffix}-adf"
+        Write-Host "   - Create a Copy Data pipeline to move data from SQL to Lakehouse"
+        Write-Host "   - Source: Azure SQL Database (pvdemo${suffix}-sqldb)"
+        Write-Host "   - Sink: Lakehouse OneLake endpoint"
+        Write-Host ""
+        Write-Host "5. Create Power BI report:"
+        Write-Host "   - In Fabric workspace, open SalesLakehouse"
+        Write-Host "   - Click 'New Power BI report'"
+        Write-Host "   - Build report on lakehouse tables"
+        Write-Host ""
+        Write-Host "6. Register Fabric workspace in Purview:"
+        Write-Host "   - Open Purview: ${accountName}.purview.azure.com"
+        Write-Host "   - Register the Fabric workspace as a data source"
+        Write-Host ""
+        Write-Host "For detailed instructions, see FABRIC_INTEGRATION.md in the repository."
+        Write-Host "═══════════════════════════════════════════════════════════════════════════════"
+        Write-Host ""
+    }
+    else {
+        Write-Host "Error details: $errorMessage"
+        Write-Host "You may need to manually configure Fabric workspace and lakehouse."
+    }
     Write-Host "Continuing with rest of deployment..."
 }
 

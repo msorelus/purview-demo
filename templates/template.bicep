@@ -4,6 +4,8 @@ param sqlServerAdminLogin string = 'sqladmin'
 @secure()
 @description('Please specify a password for the Azure SQL Server administrator. Default value: newGuid().')
 param sqlServerAdminPassword string = newGuid()
+@description('Azure AD User Principal Name (email) for Fabric Capacity Administrator. Example: user@domain.com')
+param fabricAdminUpn string = ''
 
 // Variables
 var tenantId = subscription().tenantId
@@ -402,8 +404,10 @@ resource roleAssignment8 'Microsoft.Authorization/roleAssignments@2020-08-01-pre
 // }
 
 // Microsoft Fabric Capacity (F2 SKU - lowest tier for dev/test)
-resource fabricCapacity 'Microsoft.Fabric/capacities@2023-11-01' = {
-  name: 'pvdemo${suffix}-fabric'
+// NOTE: Fabric requires UPN (email format) not Object ID for admin members
+// We add both the user UPN and the managed identity (as Object ID) to enable both manual and automated operations
+resource fabricCapacity 'Microsoft.Fabric/capacities@2023-11-01' = if (fabricAdminUpn != '') {
+  name: 'purviewdemofabric'  // Fixed name without hyphens (Fabric doesn't support hyphens)
   location: location
   sku: {
     name: 'F2'  // F2 is the lowest SKU for Fabric (2 capacity units)
@@ -412,7 +416,10 @@ resource fabricCapacity 'Microsoft.Fabric/capacities@2023-11-01' = {
   properties: {
     administration: {
       members: [
-        userAssignedIdentity.properties.principalId
+        fabricAdminUpn
+        // Note: Managed Identity Object IDs are not supported in capacity admins
+        // Fabric workspace creation will need to use user credentials or be done manually
+        // userAssignedIdentity.properties.principalId  // This would fail - only UPNs allowed
       ]
     }
   }
@@ -426,7 +433,7 @@ resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
   kind: 'AzurePowerShell'
   properties: {
     azPowerShellVersion: '11.0'  // Updated to latest recommended version
-    arguments: '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId} -fabricCapacityName ${fabricCapacity.name}'
+    arguments: fabricAdminUpn != '' ? '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId} -fabricCapacityName ${fabricCapacity.name}' : '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId}'
     // Use the fixed script from your repository
     primaryScriptUri: 'https://raw.githubusercontent.com/navintkr/purview-demo/main/scripts/script.ps1'
     forceUpdateTag: guid(resourceGroup().id)
