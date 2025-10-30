@@ -2,14 +2,6 @@
 
 This repository provides an automated deployment for a pre-populated Microsoft Purview demo environment. This version includes **fixes for Azure PowerShell module version conflicts** that prevent deployment failures.
 
-## 🔧 Key Improvements
-
-- **Fixed PowerShell Module Conflicts**: Resolved Az.Purview module version compatibility issues
-- **REST API Implementation**: Uses Azure Management REST APIs to eliminate module dependencies
-- **Enhanced Error Handling**: Comprehensive logging and retry logic for reliable deployment
-- **Streamlined Architecture**: Single optimized deployment script
-- **Updated Dependencies**: Latest Azure PowerShell version (11.0) for better compatibility
-
 ## Prerequisites
 
 * An active [Azure subscription](https://azure.microsoft.com/en-us/free/)
@@ -37,14 +29,6 @@ This repository provides an automated deployment for a pre-populated Microsoft P
      --template-file "templates/template.bicep" \
      --parameters sqlServerAdminPassword="<<your-sql-admin-password-here>>"
    ```
-
-## � Deployment Approach
-
-This implementation uses a **REST API-based PowerShell script** that:
-- Avoids Azure PowerShell module version conflicts
-- Uses Azure Management REST APIs for Purview operations
-- Provides more reliable deployment in Azure deployment script environments
-- Includes comprehensive error handling and retry logic
 
 ## �📦 Deployed Resources
 
