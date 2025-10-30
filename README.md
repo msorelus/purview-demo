@@ -30,7 +30,7 @@ This repository provides an automated deployment for a pre-populated Microsoft P
      --parameters sqlServerAdminPassword="<<your-sql-admin-password-here>>"
    ```
 
-## �📦 Deployed Resources
+##  Deployed Resources
 
 The deployment creates a complete Purview demo environment including:
 
@@ -39,8 +39,65 @@ The deployment creates a complete Purview demo environment including:
 - **Azure Data Lake Storage Gen2** - With sample datasets
 - **Azure Data Factory** - Pre-configured pipelines and datasets
 - **Azure Synapse Analytics** - Analytics workspace
+- **Microsoft Fabric Capacity (F2 SKU)** - Fabric workspace with Lakehouse
 - **Azure Key Vault** - Secure credential storage
 - **Managed Identity** - For secure service-to-service authentication
+
+## 🎯 Microsoft Fabric Integration
+
+This deployment includes Microsoft Fabric integration with:
+
+### Fabric Workspace & Lakehouse
+- **F2 SKU Capacity** - Lowest cost tier for dev/test (2 capacity units)
+- **Lakehouse** - For storing SQL data in Delta format
+- **OneLake Integration** - Unified data lake storage
+
+### Data Pipeline Flow
+1. **SQL Database** → Azure Data Factory → **Fabric Lakehouse**
+2. **Lakehouse Tables** → Power BI → **Reports & Dashboards**
+3. **All assets governed** by Microsoft Purview
+
+### Post-Deployment Configuration
+
+After the automated deployment, complete these manual steps for full Fabric integration:
+
+**📚 See detailed step-by-step guide**: [FABRIC_INTEGRATION.md](./FABRIC_INTEGRATION.md)
+
+**Quick Steps**:
+
+1. **Access Fabric Workspace**:
+   - Navigate to [Power BI Portal](https://app.powerbi.com)
+   - Find the workspace: `PurviewDemoWorkspace-[suffix]`
+
+2. **Create Data Pipeline to Lakehouse**:
+   ```
+   - In Fabric workspace, create a new Data pipeline
+   - Add Copy activity: SQL Database → Lakehouse
+   - Use the SQL credentials from Key Vault
+   - Map tables to Lakehouse Tables folder
+   ```
+
+3. **Create Power BI Report**:
+   ```
+   - Connect to Lakehouse using Direct Lake mode
+   - Build report on AdventureWorksLT tables
+   - Publish report to workspace
+   ```
+
+4. **Register Fabric in Purview**:
+   ```
+   - In Purview, add Fabric workspace as a data source
+   - Configure scanning for Lakehouse assets
+   - Enable lineage tracking from SQL → Lakehouse → Power BI
+   ```
+
+### Why Manual Steps?
+Fabric workspace and lakehouse creation via REST API requires:
+- Power BI Premium/Fabric capacity licenses
+- Specific API permissions that may require tenant admin consent
+- Power BI service principal authentication
+
+The deployment script initiates the Fabric setup, but you may need to complete configuration manually through the Power BI/Fabric portal.
 
 ## 🔐 Security Features
 

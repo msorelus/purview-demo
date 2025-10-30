@@ -401,6 +401,23 @@ resource roleAssignment8 'Microsoft.Authorization/roleAssignments@2020-08-01-pre
 //   }
 // }
 
+// Microsoft Fabric Capacity (F2 SKU - lowest tier for dev/test)
+resource fabricCapacity 'Microsoft.Fabric/capacities@2023-11-01' = {
+  name: 'pvdemo${suffix}-fabric'
+  location: location
+  sku: {
+    name: 'F2'  // F2 is the lowest SKU for Fabric (2 capacity units)
+    tier: 'Fabric'
+  }
+  properties: {
+    administration: {
+      members: [
+        userAssignedIdentity.properties.principalId
+      ]
+    }
+  }
+}
+
 // Post Deployment Script (Data Plane Operations)
 // Using inline script content to avoid download issues
 resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
@@ -409,7 +426,7 @@ resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
   kind: 'AzurePowerShell'
   properties: {
     azPowerShellVersion: '11.0'  // Updated to latest recommended version
-    arguments: '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId}'
+    arguments: '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId} -fabricCapacityName ${fabricCapacity.name}'
     // Use the fixed script from your repository
     primaryScriptUri: 'https://raw.githubusercontent.com/navintkr/purview-demo/main/scripts/script.ps1'
     forceUpdateTag: guid(resourceGroup().id)
@@ -427,5 +444,6 @@ resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
     roleAssignment
     roleAssignment3  // Ensure Purview has storage permissions before script runs
     roleAssignment7  // Ensure ADF has storage permissions before script runs
+    fabricCapacity  // Ensure Fabric capacity is created before script runs
   ]
 }

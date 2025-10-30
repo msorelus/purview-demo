@@ -12,7 +12,8 @@ param(
     [string]$sqlServerName,
     [string]$storageAccountName,
     [string]$subscriptionId,
-    [string]$vaultUri
+    [string]$vaultUri,
+    [string]$fabricCapacityName
 )
 
 # Alternative implementation using REST APIs instead of PowerShell modules to avoid version conflicts
@@ -433,4 +434,90 @@ $glossaryGuid = (createGlossary $access_token).guid
 $glossaryTermsTemplateUri = 'https://raw.githubusercontent.com/tayganr/purviewlab/main/assets/import-terms-sample.csv'
 importGlossaryTerms $access_token $glossaryGuid $glossaryTermsTemplateUri
 
+# 15. Create Microsoft Fabric Workspace and Lakehouse
+Write-Host "Setting up Microsoft Fabric workspace and lakehouse..."
+try {
+    # Get Fabric access token
+    $fabricTokenResponse = Invoke-RestMethod -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fapi.fabric.microsoft.com%2F' -Headers @{Metadata="true"} -Method GET
+    $fabricToken = $fabricTokenResponse.access_token
+    
+    $managementToken = Get-AzureManagementToken
+    
+    # Create Fabric Workspace
+    $workspaceName = "PurviewDemoWorkspace-${accountName}"
+    $fabricWorkspacePayload = @{
+        displayName = $workspaceName
+        description = "Purview Demo Fabric Workspace"
+        capacityId = "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Fabric/capacities/${fabricCapacityName}"
+    } | ConvertTo-Json
+    
+    Write-Host "Creating Fabric workspace: $workspaceName"
+    $workspaceUri = "https://api.fabric.microsoft.com/v1/workspaces"
+    $workspace = Invoke-RestMethod -Uri $workspaceUri -Method POST -Body $fabricWorkspacePayload -Headers @{
+        'Authorization' = "Bearer $fabricToken"
+        'Content-Type' = 'application/json'
+    }
+    $workspaceId = $workspace.id
+    Write-Host "Fabric workspace created: $workspaceId"
+    
+    # Wait for workspace to be ready
+    Start-Sleep -Seconds 30
+    
+    # Create Lakehouse in Fabric Workspace
+    $lakehouseName = "SalesLakehouse"
+    $lakehousePayload = @{
+        displayName = $lakehouseName
+        description = "Lakehouse for SQL data from AdventureWorks"
+    } | ConvertTo-Json
+    
+    Write-Host "Creating Lakehouse: $lakehouseName"
+    $lakehouseUri = "https://api.fabric.microsoft.com/v1/workspaces/${workspaceId}/lakehouses"
+    $lakehouse = Invoke-RestMethod -Uri $lakehouseUri -Method POST -Body $lakehousePayload -Headers @{
+        'Authorization' = "Bearer $fabricToken"
+        'Content-Type' = 'application/json'
+    }
+    $lakehouseId = $lakehouse.id
+    Write-Host "Lakehouse created: $lakehouseId"
+    
+    # Create ADF Pipeline to copy SQL data to Lakehouse
+    Write-Host "Creating Data Factory pipeline to copy SQL data to Lakehouse..."
+    
+    # Get the Lakehouse ABFS path (OneLake path)
+    $lakehouseAbfsPath = "abfss://${workspaceId}@onelake.dfs.fabric.microsoft.com/${lakehouseId}/Tables"
+    
+    # Create Lakehouse Linked Service in ADF
+    $lakehouseLinkedService = @{
+        name = "FabricLakehouseLinkedService"
+        properties = @{
+            type = "AzureBlobFS"
+            typeProperties = @{
+                url = "https://onelake.dfs.fabric.microsoft.com"
+            }
+            annotations = @()
+        }
+    }
+    
+    # Note: Actual Fabric integration requires Power BI REST API and proper authentication
+    # This is a placeholder for the full implementation
+    Write-Host "Fabric workspace and lakehouse setup initiated. Manual configuration may be required for:"
+    Write-Host "  1. Data Factory pipeline to Lakehouse connection"
+    Write-Host "  2. Power BI report creation"
+    Write-Host "  3. Purview scanning of Fabric workspace"
+    Write-Host ""
+    Write-Host "Fabric Workspace ID: $workspaceId"
+    Write-Host "Lakehouse ID: $lakehouseId"
+    Write-Host "OneLake Path: $lakehouseAbfsPath"
+}
+catch {
+    Write-Warning "Fabric setup encountered an issue: $($_.Exception.Message)"
+    Write-Host "You may need to manually configure Fabric workspace and lakehouse."
+    Write-Host "Continuing with rest of deployment..."
+}
+
 Write-Host "Purview demo deployment completed successfully!"
+Write-Host ""
+Write-Host "Next Steps for Fabric Integration:"
+Write-Host "1. Navigate to Fabric workspace in Power BI portal"
+Write-Host "2. Create a dataflow/pipeline to copy SQL data to Lakehouse"
+Write-Host "3. Create a Power BI report on the Lakehouse data"
+Write-Host "4. Register Fabric workspace in Purview for governance"
