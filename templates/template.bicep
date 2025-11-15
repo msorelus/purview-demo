@@ -1,9 +1,8 @@
 // Parameters
-@description('Please specify a login name for the Azure SQL Server administrator. Default value: sqladmin.')
-param sqlServerAdminLogin string = 'sqladmin'
-@secure()
-@description('Please specify a password for the Azure SQL Server administrator. Default value: newGuid().')
-param sqlServerAdminPassword string = newGuid()
+@description('Azure AD User Principal Name (email) for SQL Server Azure AD Administrator. Example: user@domain.com')
+param sqlAdminUpn string
+@description('Azure AD Object ID for SQL Server Azure AD Administrator')
+param sqlAdminObjectId string
 @description('Azure AD User Principal Name (email) for Fabric Capacity Administrator. Example: user@domain.com')
 param fabricAdminUpn string = ''
 
@@ -31,6 +30,7 @@ resource purviewAccount 'Microsoft.Purview/accounts@2021-07-01' = {
   }
   tags: {
     resourceByPass: 'allowed'
+    SecurityControl: 'Ignore'
   }
 }
 
@@ -52,12 +52,18 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-08-01-prev
 }
 
 // Azure SQL Server
-resource sqlsvr 'Microsoft.Sql/servers@2021-02-01-preview' = {
+resource sqlsvr 'Microsoft.Sql/servers@2023-05-01-preview' = {
   name: 'pvdemo${suffix}-sqlsvr'
   location: location
   properties: {
-    administratorLogin: sqlServerAdminLogin
-    administratorLoginPassword: sqlServerAdminPassword
+    administrators: {
+      administratorType: 'ActiveDirectory'
+      principalType: 'User'
+      login: sqlAdminUpn
+      sid: sqlAdminObjectId
+      tenantId: tenantId
+      azureADOnlyAuthentication: true
+    }
   }
   resource firewall1 'firewallRules' = {
     name: 'allowAzure'
@@ -137,7 +143,7 @@ resource kv 'Microsoft.KeyVault/vaults@2021-04-01-preview' = {
   resource secret 'secrets' = {
     name: sqlSecretName
     properties: {
-      value: sqlServerAdminPassword
+      value: sqlAdminUpn
     }
   }
 }
@@ -152,14 +158,18 @@ resource adls 'Microsoft.Storage/storageAccounts@2021-04-01' = {
   }
   properties: {
     isHnsEnabled: true
-    allowBlobPublicAccess: true
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+  }
+  tags: {
+    SecurityControl: 'Ignore'
   }
   resource blobService 'blobServices' = {
     name: 'default'
     resource blobContainer 'containers' = {
       name: 'bing'
       properties: {
-        publicAccess: 'Blob'
+        publicAccess: 'None'
       }
     }
   }
@@ -317,6 +327,7 @@ resource swsadls 'Microsoft.Storage/storageAccounts@2021-04-01' = {
   }
   properties: {
     isHnsEnabled: true
+    allowSharedKeyAccess: false
     networkAcls: {
       bypass: 'AzureServices'
       virtualNetworkRules: []
@@ -330,6 +341,9 @@ resource swsadls 'Microsoft.Storage/storageAccounts@2021-04-01' = {
     name: 'default'
     resource container 'containers' = {
       name: 'synapsefs${suffix}'
+      properties: {
+        publicAccess: 'None'
+      }
     }
   }
 }
@@ -392,6 +406,17 @@ resource roleAssignment8 'Microsoft.Authorization/roleAssignments@2020-08-01-pre
   }
 }
 
+// Role Assignment: Who: Managed Identity (Deployment Script); What: Storage Blob Data Contributor (RBAC role); Scope: ADLS Gen2 Storage Account
+resource roleAssignmentScript 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
+  name: guid('raScript${resourceGroupName}')
+  scope: adls
+  properties: {
+    principalId: userAssignedIdentity.properties.principalId
+    roleDefinitionId: role['StorageBlobDataContributor']
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Assign Storage Blob Data Reader RBAC role to Current User
 // resource roleAssignment9 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
 //   name: guid('ra09${resourceGroupName}')
@@ -427,13 +452,16 @@ resource fabricCapacity 'Microsoft.Fabric/capacities@2023-11-01' = if (fabricAdm
 
 // Post Deployment Script (Data Plane Operations)
 // Using inline script content to avoid download issues
-resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
+resource script 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: 'script'
   location: location
   kind: 'AzurePowerShell'
+  tags: {
+    SecurityControl: 'Ignore'
+  }
   properties: {
     azPowerShellVersion: '11.0'  // Updated to latest recommended version
-    arguments: fabricAdminUpn != '' ? '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId} -fabricCapacityName ${fabricCapacity.name}' : '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId}'
+    arguments: fabricAdminUpn != '' ? '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlAdminUpn} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId} -fabricCapacityName ${fabricCapacity.name}' : '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlAdminUpn} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId}'
     // Use the fixed script from your repository
     primaryScriptUri: 'https://raw.githubusercontent.com/navintkr/purview-demo/main/scripts/script.ps1'
     forceUpdateTag: guid(resourceGroup().id)
@@ -451,6 +479,6 @@ resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
     roleAssignment
     roleAssignment3  // Ensure Purview has storage permissions before script runs
     roleAssignment7  // Ensure ADF has storage permissions before script runs
-    fabricCapacity  // Ensure Fabric capacity is created before script runs
+    roleAssignmentScript  // Ensure deployment script has storage permissions
   ]
 }
